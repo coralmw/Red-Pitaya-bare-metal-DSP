@@ -7,53 +7,16 @@ import os
 import uuid
 from PyRedPitaya.board import RedPitaya
 
+COMM_RX_AT_ROWS = 0xFFFF9010
+COMM_RX_AT_FLAG = 0xFFFF9014
+COMM_RX_AT      = 0xFFFF9018
+
+
 def bin(s):
     ''' Returns the set bits in a positive int as a str.'''
     return str(s) if s<=1 else bin(s>>1) + str(s&1)
 
 class rpServer(object):
-
-    RPPINNAMES = [
-        'RP_LED0',
-        'RP_LED1',
-        'RP_LED2',
-        'RP_LED3',
-        'RP_LED4',
-        'RP_LED5',
-        'RP_LED6',
-        'RP_LED7',
-        'RP_DIO0_P',
-        'RP_DIO1_P',
-        'RP_DIO2_P',
-        'RP_DIO3_P',
-        'RP_DIO4_P',
-        'RP_DIO5_P',
-        'RP_DIO6_P',
-        'RP_DIO7_P',
-        'RP_DIO0_N',
-        'RP_DIO1_N',
-        'RP_DIO2_N',
-        'RP_DIO3_N',
-        'RP_DIO4_N',
-        'RP_DIO5_N',
-        'RP_DIO6_N',
-        'RP_DIO7_N',
-    ]
-
-    # The names are a enum, so mapping 0 to the first will allow lookups into the
-    # enum in C. Defined in rp.h
-    RPPINS =  dict(zip(RPPINNAMES, range(len(RPPINNAMES))))
-
-    ## The bitshifts are from the definitions of the old dsp card.
-    DigitalLineToRPPORT = {
-    	1 << 0:RPPINS['RP_DIO1_P'], # 'EMCCDa'
-    	1 << 1:RPPINS['RP_DIO2_P'], # 'EMCCDb'
-    	1 << 6:RPPINS['RP_DIO3_P'], # 'BNSSLM'
-        1 << 2:RPPINS['RP_DIO4_P'], # '405 DeepStar'
-        1 << 3:RPPINS['RP_DIO5_P'], # '488 DeepStar'
-        1 << 4:RPPINS['RP_DIO6_P'], # '561 Cobalt'
-        1 << 5:RPPINS['RP_DIO7_P'], # '647 DeepStar'
-    }
 
     def __init__(self):
         self.timeLineValues = []
@@ -61,6 +24,12 @@ class rpServer(object):
         self.red_pitaya = RedPitaya()
         self.pid = None
         self.name = None
+        self.times = []
+        self.digitals = []
+        self.analogA = []
+        self.analogB = []
+
+        self.OCM = open('/dev/mem', 'r+')
 
     ## In order to just toggle a pin, we create a short actionTable
     # turning the pin on and then off after 5 secs.
@@ -102,29 +71,31 @@ class rpServer(object):
         # wha?
         pass
 
-    def profileSet(self, profileStr, digitals, *analogs): # This is downloading the action table
+    def profileSet(self, profileStr, digitals, *analogs):
+        # This is downloading the action table
         # digitals is numpy.zeros((len(times), 2), dtype = numpy.uint32),
         # starting at 0 -> [times for digital signal changes, digital lines]
         # analogs is a list of analog lines and the values to put on them at each time
-
-        for time, DigitalBitMask in zip(*digitals):
-            for shift, value in enumerate(bin(DigitalBitMask)[::-1].ljust(6, '0')):
-                self.timeLineValues.append( (time, self.DigitalLineToRPPORT[1<<shift], value) )
-
-        for pin, analogLine in enumerate(analogs):
-            print(pin, analogLine)
-            for time, value in zip(*analogLine):
-                self.timeLineValues.append( (time, -(pin+1), value*(2**31-1)))
-
-        self.timeLineValues.sort(key=lambda x: x[0])
+        self.times, self.digitals = zip(*digitals)
+        self.analogA = analogs[0]
+        self.analogB = analogs[1]
 
     def DownloadProfile(self): # This is saving the action table
-        for time, line, value in self.timeLineValues:
-            secs = repr(int(time/1e9))
-            nanos = repr(int(time%1e9))
-            print('{} {} {} {}'.format(secs, nanos, line, int(value)), file=self.profileFile)
-        self.profileFile.flush()
-        self.profileFile.close()
+        # unsigned long - no rows
+        struct.pack_into('L', self.OCM, COMM_RX_AT_ROWS, len(times)) # write the no of actiontable rows
+        self.OCM.flush()
+        for time, DigitalBitMask, analogA, analogB in zip(self.times, self.digitals,
+                                                          self.analogA, self.analogB):
+            nanos = time * 1e9
+            while struct.unpack('i', self.OCM, COMM_RX_AT_FLAG) != 0:
+                pass # wait for the value to be consumed
+            # nanos, clocks, pins, a1, a2
+            struct.pack_into('QQLLL', self.OCM, COMM_RX_AT, time,
+                                                            DigitalBitMask,
+                                                            analogA,
+                                                            analogB)
+            struct.pack_into('i', self.OCM, COMM_RX_AT_FLAG, 1)
+
 
     def InitProfile(self, numReps):
         self.name = 'profile'
@@ -135,7 +106,6 @@ class rpServer(object):
         cmd = ['./dsp', os.path.join(os.getcwd(), self.name)]
         print('calling', cmd)
         self.pid = subprocess.Popen(cmd).pid
-        # this is the "run" return when done. No error checking so...
 
     def ReadPosition(self):
         pass
