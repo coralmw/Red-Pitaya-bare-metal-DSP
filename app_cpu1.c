@@ -86,48 +86,6 @@ void pin(int pin, int state){
   Xil_Out32(PINS, Xil_In32(PINS) || state << pin);
 }
 
-
-// // From XAPP1078
-// void myPutchar(char c) {
-// 	while(Xil_In32(COMM_BASE+COMM_TX_FLAG_OFFSET) != 0);	//wait for cpu0 to consume previous value
-// 	Xil_Out32(COMM_BASE+COMM_TX_DATA_OFFSET, c);
-//   Xil_Out32(COMM_BASE+COMM_TX_FLAG_OFFSET, 0x00000001);
-//   // int* value = (int *)(COMM_BASE+COMM_TX_DATA_OFFSET);
-//   // int* flag = (int *)(COMM_BASE+COMM_TX_FLAG_OFFSET);
-//   // *value = (uint32_t)c;
-//   // *flag = 1;
-// 	//dmb();
-// }
-
-// void myPutcharUART(char c){
-//   int i;
-//   Xil_Out32(PINS, 0);
-//   sleepMicros(104);
-//
-//   for ( i = 8 ; i != 0 ; --i ) {
-//     if (c & 0x01) Xil_Out32(PINS, ~0);
-//     else          Xil_Out32(PINS, 0);
-//     c >>= 1;
-//     sleepMicros(104);//9600BPS
-//   }
-//   Xil_Out32(PINS, ~0);
-//   sleepMicros(104);
-// }
-
-// void printm(char* str, int len){
-//   leds = leds + 4;
-//   Xil_Out32(LEDS, leds);
-//   while( Xil_In32(COMM_BASE+COMM_TX_FLAG_OFFSET) ); //wait for flag to be cleared
-//   leds = leds + 8;
-//   Xil_Out32(LEDS, leds);
-//   int i;
-//   for (i = 0; i < len; i++){
-//     *(uint32_t *)(0xFFFF0000+i) = str[i];
-//   }
-//   leds = leds + 16;
-//   Xil_Out32(LEDS, leds);
-// }
-
 // global to keep track of state.
 int leds = 0;
 actionTable_t actiontable[COMM_RX_AT_ROWS];
@@ -212,29 +170,6 @@ int zero_ocm(){
     *(uint32_t *)(COMM_BASE+i) = 0x00000000U;
   }
 }
-
-// int main(){
-//   Xil_Out32(LEDS, 0xFFFFFFFF);
-//   while (1){
-//     Xil_Out32(LEDS, 0xFFFFFFFF);
-//     Xil_Out32(PINS, 0xFFFFFFFF);
-//
-//   }
-// }
-
-// void printh(){
-//   char h[] = "hello, World!\n";
-//   int i;
-//   for (i = 0; i < 16; i++){
-//     *(volatile char *)(COMM_BASE+i) = h[i];
-//   }
-//   for (i = 0; i < 16; i++){
-//     *(volatile char *)(COMM_BASE+i+16) = h[i];
-//   }
-//   for (i = 0; i < 16; i++){
-//     *(volatile char *)(COMM_BASE+i+32) = h[i];
-//   }
-// }
 
 void sleep(int secs){
   int waitime = COUNTS_PER_SECOND * secs;
