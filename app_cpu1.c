@@ -10,10 +10,12 @@
 #include <stdlib.h>
 #include <xtime_l.h>
 #include <xil_io.h>
-#include "regdefs.h"
-#undef COMM_RX_AT_ROWS
-#define COMM_RX_AT_ROWS 500
 
+#include "printf.h"
+
+#include "regdefs.h"
+
+#define MAXROWS 500
 
 // TRANSLATED TO THE TOP OF MEMORY?
 // 0x1ffffff4 in linux rather than
@@ -71,7 +73,8 @@ const struct rproc_resource
 };
 
 typedef struct actionTable {
-	unsigned long long nanos; // ulong max 4.9secs, ull max = 584 years
+	uint64_t nanos; // ulong max 4.9secs, ull max = 584 years
+  XTime clocks;
 	uint32_t pins;
   uint32_t a1;
   uint32_t a2;
@@ -88,8 +91,13 @@ void pin(int pin, int state){
 
 // global to keep track of state.
 int leds = 0;
-actionTable_t actiontable[COMM_RX_AT_ROWS];
+actionTable_t actiontable[MAXROWS];
 XTime now = 0;
+
+void ledstatus(int led){
+  leds |= 1 << led;
+  Xil_Out32(LEDS, leds);
+}
 
 //HACK. OMG
 void dumpcache(){
@@ -100,34 +108,43 @@ void dumpcache(){
 }
 
 void myPutchar(char c) {
-	//while(COMM_TX_FLAG) dumpcache();	//wait for cpu0 to consume previous value
-  leds |= 1 << 3;
-  Xil_Out32(LEDS, leds);
+	while(COMM_TX_FLAG) dumpcache();	//wait for cpu0 to consume previous value
+  dumpcache();
 	COMM_TX_DATA = (volatile unsigned long)c;
-  leds |= 1 << 4;
-  Xil_Out32(LEDS, leds);
 	dmb();
-  leds |= 1 << 5;
-  Xil_Out32(LEDS, leds);
 	COMM_TX_FLAG = 1;
   //dmb();
   dumpcache();
-  sleep(1);
 }
 
-void outbyte(char c) {
-  leds ^= 1 << 2;
-  Xil_Out32(LEDS, leds);
+void tinyprintf_putc(void* p, char c){
   myPutchar(c);
 }
+
+void printm(char string[], int len){
+  int i;
+  for (i = 0; i < len; i++){
+    myPutchar(string[i]);
+  }
+}
+
 
 void getActionTable(actionTable_t* actiontable){
   int i;
   for (i = 0; i < COMM_RX_AT_ROWS; i++){
-    while (COMM_RX_AT_FLAG == 0); //wait for row to be ready
+    ledstatus(2);
+    while (COMM_RX_AT_FLAG == 0) dumpcache(); //wait for row to be ready
+    ledstatus(3);
+    dumpcache();
     actiontable[i] = COMM_RX_AT;
+    printm("got val\n", 8);
+    if (actiontable[i].pins)
+      printm("high\n", 5);
+    ledstatus(4);
     COMM_RX_AT_FLAG = 0; // signal for more data
+    dumpcache();
   }
+  ledstatus(5);
 }
 
 void getFActionTable(actionTable_t* actiontable){
@@ -144,16 +161,18 @@ void getFActionTable(actionTable_t* actiontable){
     } else {
       actiontable[i] = dummyATdown;
     }
-    actiontable[i].nanos = i*10000000;
+    actiontable[i].nanos = nanos;
+    nanos += 10000000;
   }
 }
 
-void printm(char string[], int len){
+void findClockOffset(actionTable_t* actiontable){
   int i;
-  for (i = 0; i < len; i++){
-    outbyte(string[i]);
+  for (i = 0; i < COMM_RX_AT_ROWS; i++){
+    actiontable[i].clocks = actiontable[i].nanos * 100000000 / COUNTS_PER_SECOND;
   }
 }
+
 
 
 int fill(){
@@ -186,67 +205,51 @@ void usleep(int usecs){
 }
 
 
-void ledstatus(int led){
-  leds |= 1 << led;
-  Xil_Out32(LEDS, leds);
-}
 
-#/* alloc action table in the unused area at top of ram */
+/* alloc action table in the unused area at top of ram */
 /* random crashes - don't try this. */
 // actionTable_t *actiontable = (actionTable_t *)RAM_ADDR;
 
 int main()
 {
+  init_printf(NULL, tinyprintf_putc);
+
   XTime_SetTime(now);
   Xil_Out32(PINS_MODE, 0xFFFFFFFF); // set pins to out (all)
-  //Xil_Out32(PINS, 0xFFFFFFFF);
+  Xil_Out32(PINS, 0);
   Xil_Out32(LEDS, leds);
   sleep(1);
   ledstatus(1);
   // sleep(1);
-  //zero_ocm();
-  //printm("hello, World!\n", 15);
+  //zero_ocm(); // don't do this, stuff is set up before we are called
+  printm("hello, World!\n", 15);
   // get the action table
   actionTable_t currRow;
-  getFActionTable(actiontable);
-  ledstatus(2);
+  getActionTable(actiontable);
+  printm("got action table\n", 17);
+  findClockOffset(actiontable);
+  printm("translated to nanos\n", 19);
   // init the timers. ns?
   XTime startTime = now;
   XTime diff;
   unsigned long long nsecs;
-  ledstatus(3);
   XTime_GetTime(&startTime);
-  ledstatus(4);
-  int nsPerCount = 1000000000 / COUNTS_PER_SECOND;
-  ledstatus(5);
+  ledstatus(6);
   // while (1){
   //   Xil_Out32(PINS, ~Xil_In32(PINS));
   //
   // }
+  printm("running\n", 8);
   int rowN;
   for (rowN = 0; rowN < COMM_RX_AT_ROWS; rowN++){
     currRow = actiontable[rowN];
-    //diff = now - startTime;
-    //nsecs = (diff * 10000000) / COUNTS_PER_SECOND;
-    //while (nsecs < currRow.nanos) XTime_GetTime(&now);
-    usleep(currRow.nanos / 1000);
+    while (diff < currRow.clocks) {
+      XTime_GetTime(&now);
+      diff = now - startTime;
+    }
     Xil_Out32(PINS, currRow.pins);
   }
   ledstatus(7);
+  Xil_Out32(PINS, 0);
   return 0;
 }
-
-  //
-  // int freq = 2;
-  // volatile int i = 0;
-  // while(1)
-  // {
-  //   XTime_GetTime(&t);
-  //   if (t - startTime >= waitTime){
-  //     Xil_Out32(LEDS, leds);
-  //     leds ^= 1 << 7;
-  //     startTime = t;
-  //   }
-  // }
-//   return 0;
-// }
