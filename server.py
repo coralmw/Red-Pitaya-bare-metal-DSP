@@ -1,13 +1,126 @@
 from __future__ import print_function
 
-import Pyro4
+'''
+from server import app_cpu1
+import time
+from mmap import mmap
+import struct
+
+app = app_cpu1()
+
+# struct.unpack('i', OCM[16:20]) len
+# struct.unpack('QQLLL', OCM[24:52]) row
+# struct.unpack('i', OCM[20: 24])[0] dataready flag
+
+devmem = open('/dev/mem', 'r+b')
+OCM = mmap(devmem.fileno(), 256, offset=0xFFFF9000)
+
+app.abort()
+
+## make sure len is in OCM before start
+OCM[16:20] = struct.pack('L', 2) # len
+OCM[24:52] = struct.pack('QQLLL', # data
+                              0,
+                              0,
+                              0xFFFFFFFF,
+                              0,
+                              0)
+
+
+app.start()
+
+while struct.unpack('i', OCM[20: 24])[0] != 0: # wait for read
+    pass
+
+OCM[24:52] = struct.pack('QQLLL', # data
+                              100,
+                              0,
+                              0,
+                              0,
+                              0)
+OCM[20: 24] = struct.pack('i', 1) # ack
+## should be running.
+
+while struct.unpack('i', OCM[20: 24])[0] != 0:
+    pass
+
+OCM[24:52] = struct.pack('QQLLL', # data
+                              100000000,
+                              0,
+                              0xFFFFFFFF,
+                              0,
+                              0)
+OCM[20: 24] = struct.pack('i', 1) # ack
+
+from server import app_cpu1
+import time
+from mmap import mmap
+import struct
+
+app = app_cpu1()
+
+#16->24 +8
+# struct.unpack('i', OCM[16:20]) len
+# struct.unpack('QQLLL', OCM[24:52]) row
+# struct.unpack('QQLLL', OCM[24:52])
+# struct.unpack('i', OCM[20: 24])[0] dataready flag
+
+devmem = open('/dev/mem', 'r+b')
+OCM = mmap(devmem.fileno(), 256, offset=0xFFFF9000)
+def dumpcache():
+    OCM[:] = OCM[:]
+
+#HACK
+def go(rows):
+    try:
+        app.abort()
+    except ValueError:
+        pass
+    OCM[16:20] = struct.pack('i', rows) # set len
+    OCM[20: 24] = struct.pack('i', 1) # data available
+    dumpcache()
+    print("row 0")
+    app.start()
+    val = 0xFFFFFFFF
+    for row in range(1, rows+1):
+        print("row:", row)
+        while struct.unpack('i', OCM[20: 24])[0] != 0: # wait for data to be read
+            dumpcache()
+        #OCM[24:32] = struct.pack('Q', val)
+        #
+        # should be this
+        #
+        OCM[0x18:0x18+8] = struct.pack('Q', row) # this is ending up the pin no
+        OCM[0x32:0x32+4] = struct.pack('L', val)
+        #//OCM[24:52] = struct.pack('QQLLL', row,0,val,0,0)
+        #
+        #
+        OCM[20: 24] = struct.pack('i', 1)
+        dumpcache()
+
+while True:
+    if struct.unpack('i', OCM[20: 24])[0] != 1:
+        print('wtf')
+        OCM[20: 24] = struct.pack('i', 1) # there is in fact some buffer crap going wrong.
+app.start()
+
+
+when flag == 1: data is ready to be read by app_cpu1
+when flag == 0: data has been consumed by app_cpu1, ready to write
+
+'''
+
+#import Pyro4
 import subprocess
 import time
 import os
+import struct
+from mmap import mmap
 
-COMM_RX_AT_ROWS = 0xFFFF9010
-COMM_RX_AT_FLAG = 0xFFFF9014
-COMM_RX_AT      = 0xFFFF9018
+BASE            = 0xFFFF9000
+COMM_RX_AT_ROWS = 0x10
+COMM_RX_AT_FLAG = 0x14
+COMM_RX_AT      = 0x18
 
 
 def bin(s):
@@ -18,45 +131,50 @@ def bin(s):
 class app_cpu1(object):
 
     def __init__(self):
-        self.OCM = open('/dev/mem', 'r+')
-        self.up = open('/sys/devices/soc0/1e000000.remoteproc/remoteproc0/up', 'w+')
+        self._devmem = open('/dev/mem', 'r+b')
+        self.OCM = mmap(self._devmem.fileno(), 36, offset=0xFFFF9000)
+        self.up = None
         self.remoteProcLoaded = False
         self.running = False
 
     def load(self, times, digitals, analogA, analogB):
         # unsigned long - no rows
-        struct.pack_into('L', self.OCM, COMM_RX_AT_ROWS, len(times)) # write the no of actiontable rows
-        self.OCM.flush()
+        self.OCM[16:20] = struct.pack('L', len(times)) # write the no of actiontable rows
         for time, DigitalBitMask, analogA, analogB in zip(times, digitals,
                                                           analogA, analogB):
             nanos = time * 1e9
-            while struct.unpack('i', self.OCM, COMM_RX_AT_FLAG) != 0:
+            while struct.unpack('i', self.OCM[10:14]) != 0:
                 pass # wait for the value to be consumed
             # nanos, clocks, pins, a1, a2
-            struct.pack_into('QQLLL', self.OCM, COMM_RX_AT, time,
-                                                            DigitalBitMask,
-                                                            analogA,
-                                                            analogB)
-            struct.pack_into('i', self.OCM, COMM_RX_AT_FLAG, 1)
+            self.OCM[24,52] = struct.pack('QQLLL',
+                                          self.OCM,
+                                          COMM_RX_AT,
+                                          time,
+                                          DigitalBitMask,
+                                          analogA,
+                                          analogB)
+            self.OCM[COMM_RX_AT_FLAG, COMM_RX_AT_FLAG+4] = struct.pack('i', 1)
 
     def _load_module(self):
-        if !self.remoteProcLoaded:
-            subprocess.Popen('modprobe zynq_remoteproc')
+        if not self.remoteProcLoaded:
+            subprocess.call('modprobe zynq_remoteproc', shell=True)
             self.remoteProcLoaded = True
 
     def _unload_module(self):
-        subprocess.Popen('rmmod -f zynq_remoteproc')
+        subprocess.call('rmmod -f zynq_remoteproc', shell=True)
         self.remoteProcLoaded = False
 
     def abort(self):
-        self.up.write(0)
+        self.up.write('0')
         self.up.flush()
+        self.up.close()
         self.running = True
         self._unload_module()
 
     def start(self):
         self._load_module()
-        self.up.write(1)
+        self.up = open('/sys/devices/soc0/1e000000.remoteproc/remoteproc0/up', 'w+')
+        self.up.write('1')
         self.up.flush()
         self.running = True
 
@@ -84,26 +202,14 @@ class rpServer(object):
     # if we just turned it on, the end of the DSP program will reset everything
     # too 0 instantly.
     def high(self, name):
-        with open('tmp', 'w') as f:
-            f.write('0 0 {} 1\n'.format(self.RPPINS[name]))
-            f.write('5 0 {} 0'.format(self.RPPINS[name]))
-        cmd = ['./dsp', os.path.join(os.getcwd(), 'tmp')]
-        subprocess.call(cmd)
+        pass
 
     # raw version does not do pin name lookups.
     def analog_raw(self, pin, value):
-        with open('tmp', 'w') as f:
-            f.write('0 0 {} {}\n'.format(-1*pin, value))
-            f.write('5 0 {} 0'.format(-1*pin))
-        cmd = ['./dsp', os.path.join(os.getcwd(), 'tmp')]
-        subprocess.call(cmd)
+        pass
 
     def high_raw(self, pin):
-        with open('tmp', 'w') as f:
-            f.write('0 0 {} 1\n'.format(pin))
-            f.write('5 0 {} 0'.format(pin))
-        cmd = ['./dsp', os.path.join(os.getcwd(), 'tmp')]
-        subprocess.call(cmd)
+        pass
 
     # The dsp has a handler for SIGINT that cleans up
     def Abort(self):

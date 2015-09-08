@@ -91,7 +91,7 @@ void pin(int pin, int state){
 
 // global to keep track of state.
 int leds = 0;
-actionTable_t actiontable[MAXROWS];
+actionTable_t actiontable[MAXROWS]; // static alloc to get in .bss
 XTime now = 0;
 
 void ledstatus(int led){
@@ -133,13 +133,14 @@ void getActionTable(actionTable_t* actiontable){
   int i;
   for (i = 0; i < COMM_RX_AT_ROWS; i++){
     ledstatus(2);
-    while (COMM_RX_AT_FLAG == 0) dumpcache(); //wait for row to be ready
+    printf("waiting for row %u\n", i);
+    while (COMM_RX_AT_FLAG != 1) dumpcache(); //wait for row to be ready
+    printf("got row\n");
     ledstatus(3);
     dumpcache();
-    actiontable[i] = COMM_RX_AT;
-    printm("got val\n", 8);
-    if (actiontable[i].pins)
-      printm("high\n", 5);
+    actiontable[i].nanos = COMM_RX_AT_NANOS;
+    actiontable[i].pins = COMM_RX_AT_PINS;
+    printf("got at row time:0x%08x with val 0x%08x\n", actiontable[i].nanos, actiontable[i].pins);
     ledstatus(4);
     COMM_RX_AT_FLAG = 0; // signal for more data
     dumpcache();
@@ -172,7 +173,6 @@ void findClockOffset(actionTable_t* actiontable){
     actiontable[i].clocks = actiontable[i].nanos * 100000000 / COUNTS_PER_SECOND;
   }
 }
-
 
 
 int fill(){
@@ -213,6 +213,7 @@ void usleep(int usecs){
 int main()
 {
   init_printf(NULL, tinyprintf_putc);
+  printf("at_t %u", sizeof(actionTable_t));
 
   XTime_SetTime(now);
   Xil_Out32(PINS_MODE, 0xFFFFFFFF); // set pins to out (all)
@@ -223,6 +224,8 @@ int main()
   // sleep(1);
   //zero_ocm(); // don't do this, stuff is set up before we are called
   printm("hello, World!\n", 15);
+  printf("hello, w from printf\n");
+  printf("waiting for %ul rows\n", COMM_RX_AT_ROWS);
   // get the action table
   actionTable_t currRow;
   getActionTable(actiontable);
@@ -250,6 +253,7 @@ int main()
     Xil_Out32(PINS, currRow.pins);
   }
   ledstatus(7);
+  printf("finished\n");
   Xil_Out32(PINS, 0);
   return 0;
 }

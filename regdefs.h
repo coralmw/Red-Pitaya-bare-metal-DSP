@@ -13,8 +13,12 @@
 
 #define COMM_RX_AT_ROWS    (*(volatile unsigned long *)(0xFFFF9010))
 #define COMM_RX_AT_FLAG    (*(volatile unsigned long *)(0xFFFF9014))
-#define COMM_RX_AT         (*(volatile actionTable_t *)(0xFFFF9018))
 
+
+#define COMM_RX_AT_NANOS       (*(volatile unsigned long long *)(0xFFFF9018))
+#define COMM_RX_AT_PINS        (*(volatile uint32_t *)(0xffff9032))
+#define COMM_RX_AT_A1        (*(volatile uint32_t *)(0xffff9036))
+#define COMM_RX_AT_A2        (*(volatile uint32_t *)(0xffff903a))
 
 // RED PITAYA FPGA DEFS - use Xil_Out32 (or Xil_Out16..)
 
