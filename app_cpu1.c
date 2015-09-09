@@ -8,8 +8,10 @@
 //#include "sleep.h"
 #include <xpseudo_asm.h>
 #include <stdlib.h>
+#include <xil_types.h>
 #include <xtime_l.h>
 #include <xil_io.h>
+#include <xil_cache_l.h>
 
 #include "printf.h"
 
@@ -73,11 +75,11 @@ const struct rproc_resource
 };
 
 typedef struct actionTable {
-	uint64_t nanos; // ulong max 4.9secs, ull max = 584 years
+	u64 nanos; // ulong max 4.9secs, ull max = 584 years
   XTime clocks;
-	uint32_t pins;
-  uint32_t a1;
-  uint32_t a2;
+	u32 pins;
+  u32 a1;
+  u32 a2;
 } actionTable_t;
 
 void led(int led, int state){
@@ -134,15 +136,15 @@ void getActionTable(actionTable_t* actiontable){
   for (i = 0; i < COMM_RX_AT_ROWS; i++){
     ledstatus(2);
     printf("waiting for row %u\n", i);
-    while (COMM_RX_AT_FLAG != 1) dumpcache(); //wait for row to be ready
+    COMM_RX_AT_FLAG = 1; // bring high to signal for data
+    while (COMM_RX_AT_FLAG == 1) dumpcache(); //wait for row to be ready
     printf("got row\n");
     ledstatus(3);
     dumpcache();
     actiontable[i].nanos = COMM_RX_AT_NANOS;
     actiontable[i].pins = COMM_RX_AT_PINS;
-    printf("got at row time:0x%08x with val 0x%08x\n", actiontable[i].nanos, actiontable[i].pins);
+    printf("got at row time:0x%08x with pins 0x%08x\n", actiontable[i].nanos, actiontable[i].pins);
     ledstatus(4);
-    COMM_RX_AT_FLAG = 0; // signal for more data
     dumpcache();
   }
   ledstatus(5);
@@ -178,7 +180,7 @@ void findClockOffset(actionTable_t* actiontable){
 int fill(){
   int i;
   for (i = 0; i < OCM_SIZE; i = i+4){
-    *(volatile uint32_t *)(COMM_BASE+i) = i;
+    *(volatile u32 *)(COMM_BASE+i) = i;
     //*(volatile uint32_t *)(COMM_BASE+i+4) = 0x4F0A0000;
   }
 }
@@ -186,7 +188,7 @@ int fill(){
 int zero_ocm(){
   int i;
   for (i = 0; i < OCM_SIZE; i = i+4){
-    *(uint32_t *)(COMM_BASE+i) = 0x00000000U;
+    *(u32 *)(COMM_BASE+i) = 0x00000000U;
   }
 }
 
@@ -206,12 +208,65 @@ void usleep(int usecs){
 
 
 
+
+// ALL HAIL COPYPASTA
+
+extern u32 MMUTable; // defined in boot.S (i really, really hope) IT IS
+#include <bsp/ps7_cortexa9_1/libsrc/standalone_v3_11_a/src/xil_cache.c>
+// COPYPASTA out of xil_mmu.c - beacuse that does not want to compile
+// into the lib for some reason?
+void Xil_SetTlbAttributes(u32 addr, u32 attrib)
+{
+	u32 *ptr;
+	u32 section;
+
+	section = addr / 0x100000;
+	ptr = &MMUTable + section;
+	*ptr = (addr & 0xFFF00000) | attrib;
+
+	Xil_DCacheFlush();
+
+	mtcp(XREG_CP15_INVAL_UTLB_UNLOCKED, 0);
+	/* Invalidate all branch predictors */
+	mtcp(XREG_CP15_INVAL_BRANCH_ARRAY, 0);
+
+	dsb(); /* ensure completion of the BP and TLB invalidation */
+  isb(); /* synchronize context on this processor */
+}
+
+// COPYPASTA from https://github.com/Architech-Silica/Zynq-MMU-Caches-Control/
+int adjust_mmu_mode(unsigned int start_of_1MB_address_region, unsigned int features)
+{
+	unsigned int mmu_attributes = 0;
+
+	/* Declare the part of the page table value that gets written to the MMU Table, which is always fixed. */
+	/* NS = b0, Bit 18 = b0, TEX(2) = b1, Bit 9 = b0, Domain = b1111, Bits(1:0) = b10 ... 0x41e2 */
+	/* Fiddle with this at your own risk.  If you're not sure of what you're doing, it won't end well!! */
+	const unsigned int fixed_values = 0x41e2;
+
+	// Calculate the value that will be written to the MMU Page Table
+	mmu_attributes = fixed_values + features;
+
+	// Write the value to the TLB
+	Xil_SetTlbAttributes(start_of_1MB_address_region, mmu_attributes);
+
+	return (0);
+}
+
+// ALL REGRET COPYPASTA (cp end)
+
 /* alloc action table in the unused area at top of ram */
 /* random crashes - don't try this. */
 // actionTable_t *actiontable = (actionTable_t *)RAM_ADDR;
 
 int main()
 {
+  adjust_mmu_mode(0xFF000000, NON_CACHEABLE+AP_FULL_ACCESS);
+  Xil_DCacheDisable();
+  Xil_L2CacheDisable();
+  Xil_L1ICacheDisable();
+  Xil_L1ICacheDisable(); // turning off caches makes things worse?
+
   init_printf(NULL, tinyprintf_putc);
   printf("at_t %u", sizeof(actionTable_t));
 
@@ -225,7 +280,7 @@ int main()
   //zero_ocm(); // don't do this, stuff is set up before we are called
   printm("hello, World!\n", 15);
   printf("hello, w from printf\n");
-  printf("waiting for %ul rows\n", COMM_RX_AT_ROWS);
+  printf("waiting for %u rows\n", COMM_RX_AT_ROWS);
   // get the action table
   actionTable_t currRow;
   getActionTable(actiontable);
