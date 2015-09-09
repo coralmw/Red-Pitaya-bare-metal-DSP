@@ -40,12 +40,14 @@ int main()
     uint8_t str[MAX_STR];
     int rcnt;
 
+    printf("opening /dev/mem\n");
     fd = open("/dev/mem", O_RDWR|O_SYNC);
     if (fd < 0) {
         fprintf(stderr, "open(/dev/mem) failed (%d)\n", errno);
         return 1;
     }
 
+    printf("mapping\n");
     mm = mmap(NULL, PAGE_SIZE, PROT_READ | PROT_WRITE, MAP_SHARED, fd, COMM_BASE);
     if (mm == MAP_FAILED) {
         fprintf(stderr, "mmap64(0x%x@0x%x) failed (%d)\n",
@@ -53,36 +55,13 @@ int main()
         return 1;
     }
 
-    rcnt = 0;
     while(1) {
-
     	//read
-    	if( (flag = *(volatile uint32_t *)(mm + COMM_TX_FLAG)) ) {
-        	value = *(volatile uint32_t *)(mm + COMM_TX_DATA);
-
-    		//process non-string type data
-        	if(flag > 1) {
-        		printf("CPU1: 0x%08x = 0x%08x\n", (uint32_t)(mm + COMM_TX_DATA), value);
-
-        	//process string type data
-        	} else {
-
-        		if(rcnt < MAX_STR) {
-        			str[rcnt++] = value;
-        		}
-        		if(value == '\n') {
-        			if(rcnt != 0) {
-        				str[rcnt-1] = '\0';
-        			} else {
-        				str[0] = '\0';
-        			}
-        			printf("CPU1: %s\n", str);
-        			rcnt = 0;
-        		}
-        	}
-    		*(volatile uint32_t *)(mm + COMM_TX_FLAG) = 0;
+    	if( (flag = *(volatile uint32_t *)(mm + 0x00)) ) {
+        	value = *(volatile uint32_t *)(mm + 0x04);
+          printf("%c", value);
+    		  *(volatile uint32_t *)(mm + 0x00) = 0;
     	}
-
     }
 
     munmap((void *)mm, PAGE_SIZE);
